@@ -491,7 +491,10 @@ public class IOUtils {
         int d = 0;
         for (int cc = 0, eLen = (len / 3) * 3; d < eLen;) {
             // Assemble three bytes into an int from four "valid" characters.
-            int i = IA[chars.charAt(sIx++)] << 18 | IA[chars.charAt(sIx++)] << 12 | IA[chars.charAt(sIx++)] << 6 | IA[chars.charAt(sIx++)];
+            int i = IA[chars.charAt(sIx++)] << 18
+                    | IA[chars.charAt(sIx++)] << 12
+                    | IA[chars.charAt(sIx++)] << 6
+                    | IA[chars.charAt(sIx++)];
 
             // Add the bytes
             bytes[d++] = (byte) (i >> 16);
@@ -623,7 +626,9 @@ public class IOUtils {
                 } else {
                     //
                     if (c >= '\uDC00' && c < ('\uDFFF' + 1)) { // Character.isLowSurrogate(c)
-                        throw new JSONException("encodeUTF8 error", new MalformedInputException(1));
+                        bytes[dp++] = (byte) '?';
+                        continue;
+//                        throw new JSONException("encodeUTF8 error", new MalformedInputException(1));
                     } else {
                         uc = c;
                     }

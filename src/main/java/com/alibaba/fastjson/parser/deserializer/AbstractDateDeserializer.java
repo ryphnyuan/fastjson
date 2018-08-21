@@ -3,6 +3,7 @@ package com.alibaba.fastjson.parser.deserializer;
 import java.lang.reflect.Type;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Locale;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONException;
@@ -30,24 +31,45 @@ public abstract class AbstractDateDeserializer extends ContextObjectDeserializer
             if (format != null) {
                 SimpleDateFormat simpleDateFormat = null;
                 try {
-                    simpleDateFormat = new SimpleDateFormat(format,JSON.defaultLocale);
+                    simpleDateFormat = new SimpleDateFormat(format, JSON.defaultLocale);
                 } catch (IllegalArgumentException ex) {
                     if (format.equals("yyyy-MM-ddTHH:mm:ss.SSS")) {
                         format = "yyyy-MM-dd'T'HH:mm:ss.SSS";
-                        simpleDateFormat = new SimpleDateFormat(format);
+                        simpleDateFormat = new SimpleDateFormat(format, JSON.defaultLocale);
                     } else  if (format.equals("yyyy-MM-ddTHH:mm:ss")) {
                         format = "yyyy-MM-dd'T'HH:mm:ss";
-                        simpleDateFormat = new SimpleDateFormat(format);
+                        simpleDateFormat = new SimpleDateFormat(format, JSON.defaultLocale);
                     }
+                }
+
+                if (JSON.defaultTimeZone != null) {
+                    simpleDateFormat.setTimeZone(JSON.defaultTimeZone);
                 }
 
                 try {
                     val = simpleDateFormat.parse(strVal);
                 } catch (ParseException ex) {
+                    val = null;
+                    // skip
+                }
+
+                if (val == null && JSON.defaultLocale == Locale.CHINA) {
+                    simpleDateFormat = new SimpleDateFormat(format, Locale.US);
+                    try {
+                        val = simpleDateFormat.parse(strVal);
+                    } catch (ParseException ex) {
+                        val = null;
+                        // skip
+                    }
+                }
+
+                if (val == null) {
                     if (format.equals("yyyy-MM-dd'T'HH:mm:ss.SSS") //
                             && strVal.length() == 19) {
                         try {
-                            val = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss").parse(strVal);
+                            SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", JSON.defaultLocale);
+                            df.setTimeZone(JSON.defaultTimeZone);
+                            val = df.parse(strVal);
                         } catch (ParseException ex2) {
                             // skip
                             val = null;

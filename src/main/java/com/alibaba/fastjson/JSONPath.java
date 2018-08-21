@@ -4,7 +4,17 @@ import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
@@ -134,6 +144,27 @@ public class JSONPath implements JSONAware {
         }
 
         return evalSize(currentObject);
+    }
+
+    /**
+     * Extract keySet or field names from rootObject on this JSONPath.
+     * 
+     * @param rootObject Can be a map or custom object. Array and Collection are not supported.
+     * @return Set of keys, or <code>null</code> if not supported.
+     */
+    public Set<?> keySet(Object rootObject) {
+        if (rootObject == null) {
+            return null;
+        }
+
+        init();
+
+        Object currentObject = rootObject;
+        for (int i = 0; i < segments.length; ++i) {
+            currentObject = segments[i].eval(this, rootObject, currentObject);
+        }
+
+        return evalKeySet(currentObject);
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -361,6 +392,19 @@ public class JSONPath implements JSONAware {
         return jsonpath.evalSize(result);
     }
 
+    /**
+     * Compile jsonPath and use it to extract keySet or field names from rootObject.
+     * 
+     * @param rootObject Can be a map or custom object. Array and Collection are not supported.
+     * @param path JSONPath string to be compiled.
+     * @return Set of keys, or <code>null</code> if not supported.
+     */
+    public static Set<?> keySet(Object rootObject, String path) {
+        JSONPath jsonpath = compile(path);
+        Object result = jsonpath.eval(rootObject);
+        return jsonpath.evalKeySet(result);
+    }
+
     public static boolean contains(Object rootObject, String path) {
         if (rootObject == null) {
             return false;
@@ -520,88 +564,6 @@ public class JSONPath implements JSONAware {
         return;
     }
 
-    @SuppressWarnings("rawtypes")
-    private static void paths(Map<Object, String> paths, String parent, Object javaObject, SerializeConfig config) {
-        if (javaObject == null) {
-            return;
-        }
-        
-        if (paths.containsKey(javaObject)) {
-            return;
-        }
-        
-        paths.put(javaObject, parent);
-        
-        if (javaObject instanceof Map) {
-            Map map = (Map) javaObject;
-
-            for (Object entryObj : map.entrySet()) {
-                Map.Entry entry = (Map.Entry) entryObj;
-                Object key = entry.getKey();
-                
-                if (key instanceof String) {
-                    String path = parent.equals("/") ?  "/" + key : parent + "/" + key;
-                    paths(paths, path, entry.getValue(), config);
-                }
-            }
-            return;
-        }
-
-        if (javaObject instanceof Collection) {
-            Collection collection = (Collection) javaObject;
-
-            int i = 0;
-            for (Object item : collection) {
-                String path = parent.equals("/") ?  "/" + i : parent + "/" + i;
-                paths(paths, path, item, config);
-                ++i;
-            }
-            
-            return;
-        }
-
-        Class<?> clazz = javaObject.getClass();
-
-        if (clazz.isArray()) {
-            int len = Array.getLength(javaObject);
-
-            for (int i = 0; i < len; ++i) {
-                Object item = Array.get(javaObject, i);
-                
-                String path = parent.equals("/") ?  "/" + i : parent + "/" + i;
-                paths(paths, path, item, config);
-            }
-            
-            return;
-        }
-
-        if (ParserConfig.isPrimitive2(clazz) || clazz.isEnum()) {
-            return;
-        }
-
-        ObjectSerializer serializer = config.getObjectWriter(clazz);
-        if (serializer instanceof JavaBeanSerializer) {
-            JavaBeanSerializer javaBeanSerializer = (JavaBeanSerializer) serializer;
-            
-            try {
-                Map<String, Object> fieldValues = javaBeanSerializer.getFieldValuesMap(javaObject);
-                for (Map.Entry<String, Object> entry : fieldValues.entrySet()) {
-                    String key = entry.getKey();
-                    
-                    if (key instanceof String) {
-                        String path = parent.equals("/") ?  "/" + key : parent + "/" + key;
-                        paths(paths, path, entry.getValue(), config);
-                    }
-                }
-            } catch (Exception e) {
-                throw new JSONException("toJSON error", e);
-            }
-            return;
-        }
-        
-        return;
-    }
-
     public String getPath() {
         return path;
     }
@@ -687,6 +649,8 @@ public class JSONPath implements JSONAware {
 
                             if ("size".equals(propertyName) || "length".equals(propertyName)) {
                                 return SizeSegement.instance;
+                            } else if ("keySet".equals(propertyName)) {
+                                return KeySetSegement.instance;
                             }
 
                             throw new JSONPathException("not support jsonpath : " + path);
@@ -751,7 +715,7 @@ public class JSONPath implements JSONAware {
                 predicateFlag = true;
             }
 
-            if (predicateFlag || IOUtils.firstIdentifier(ch)) {
+            if (predicateFlag || IOUtils.firstIdentifier(ch) || ch == '\\') {
                 String propertyName = readName();
 
                 skipWhitespace();
@@ -1454,7 +1418,7 @@ public class JSONPath implements JSONAware {
         String readName() {
             skipWhitespace();
 
-            if (ch != '\\' && !IOUtils.firstIdentifier(ch)) {
+            if (ch != '\\' && !Character.isJavaIdentifierStart(ch)) {
                 throw new JSONPathException("illeal jsonpath syntax. " + path);
             }
 
@@ -1464,13 +1428,13 @@ public class JSONPath implements JSONAware {
                     next();
                     buf.append(ch);
                     if (isEOF()) {
-                        break;
+                        return buf.toString();
                     }
                     next();
                     continue;
                 }
 
-                boolean identifierFlag = IOUtils.isIdent(ch);
+                boolean identifierFlag = Character.isJavaIdentifierPart(ch);
                 if (!identifierFlag) {
                     break;
                 }
@@ -1478,13 +1442,11 @@ public class JSONPath implements JSONAware {
                 next();
             }
 
-            if (isEOF() && IOUtils.isIdent(ch)) {
+            if (isEOF() && Character.isJavaIdentifierPart(ch)) {
                 buf.append(ch);
             }
 
-            String propertyName = buf.toString();
-
-            return propertyName;
+            return buf.toString();
         }
 
         String readString() {
@@ -1648,6 +1610,15 @@ public class JSONPath implements JSONAware {
 
         public Integer eval(JSONPath path, Object rootObject, Object currentObject) {
             return path.evalSize(currentObject);
+        }
+    }
+
+    static class KeySetSegement implements Segement {
+
+        public final static KeySetSegement instance = new KeySetSegement();
+
+        public Object eval(JSONPath path, Object rootObject, Object currentObject) {
+            return path.evalKeySet(currentObject);
         }
     }
 
@@ -2002,6 +1973,10 @@ public class JSONPath implements JSONAware {
         private final long     value;
         private final Operator op;
 
+        private BigDecimal     valueDecimal;
+        private Float          valueFloat;
+        private Double         valueDouble;
+
         public IntOpSegement(String propertyName, long value, Operator op){
             this.propertyName = propertyName;
             this.propertyNameHash = TypeUtils.fnv1a_64(propertyName);
@@ -2020,20 +1995,93 @@ public class JSONPath implements JSONAware {
                 return false;
             }
 
+            if (propertyValue instanceof BigDecimal) {
+                if (valueDecimal == null) {
+                    valueDecimal = BigDecimal.valueOf(value);
+                }
+
+                int result = valueDecimal.compareTo((BigDecimal) propertyValue);
+                switch (op) {
+                    case EQ:
+                        return result == 0;
+                    case NE:
+                        return result != 0;
+                    case GE:
+                        return 0 >= result;
+                    case GT:
+                        return 0 > result;
+                    case LE:
+                        return 0 <= result;
+                    case LT:
+                        return 0 < result;
+                }
+
+                return false;
+            }
+
+            if (propertyValue instanceof Float) {
+                if (valueFloat == null) {
+                    valueFloat = Float.valueOf(value);
+                }
+
+                int result = valueFloat.compareTo((Float) propertyValue);
+                switch (op) {
+                    case EQ:
+                        return result == 0;
+                    case NE:
+                        return result != 0;
+                    case GE:
+                        return 0 >= result;
+                    case GT:
+                        return 0 > result;
+                    case LE:
+                        return 0 <= result;
+                    case LT:
+                        return 0 < result;
+                }
+
+                return false;
+            }
+
+            if (propertyValue instanceof Double) {
+                if (valueDouble == null) {
+                    valueDouble = Double.valueOf(value);
+                }
+
+                int result = valueDouble.compareTo((Double) propertyValue);
+                switch (op) {
+                    case EQ:
+                        return result == 0;
+                    case NE:
+                        return result != 0;
+                    case GE:
+                        return 0 >= result;
+                    case GT:
+                        return 0 > result;
+                    case LE:
+                        return 0 <= result;
+                    case LT:
+                        return 0 < result;
+                }
+
+                return false;
+            }
+
             long longValue = ((Number) propertyValue).longValue();
 
-            if (op == Operator.EQ) {
-                return longValue == value;
-            } else if (op == Operator.NE) {
-                return longValue != value;
-            } else if (op == Operator.GE) {
-                return longValue >= value;
-            } else if (op == Operator.GT) {
-                return longValue > value;
-            } else if (op == Operator.LE) {
-                return longValue <= value;
-            } else if (op == Operator.LT) {
-                return longValue < value;
+            switch (op) {
+                case EQ:
+                    return longValue == value;
+                case NE:
+                    return longValue != value;
+                case GE:
+                    return longValue >= value;
+                case GT:
+                    return longValue > value;
+                case LE:
+                    return longValue <= value;
+                case LT:
+                    return longValue < value;
             }
 
             return false;
@@ -2068,42 +2116,22 @@ public class JSONPath implements JSONAware {
 
             double doubleValue = ((Number) propertyValue).doubleValue();
 
-            if (op == Operator.EQ) {
-                return doubleValue == value;
-            } else if (op == Operator.NE) {
-                return doubleValue != value;
-            } else if (op == Operator.GE) {
-                return doubleValue >= value;
-            } else if (op == Operator.GT) {
-                return doubleValue > value;
-            } else if (op == Operator.LE) {
-                return doubleValue <= value;
-            } else if (op == Operator.LT) {
-                return doubleValue < value;
+            switch (op) {
+                case EQ:
+                    return doubleValue == value;
+                case NE:
+                    return doubleValue != value;
+                case GE:
+                    return doubleValue >= value;
+                case GT:
+                    return doubleValue > value;
+                case LE:
+                    return doubleValue <= value;
+                case LT:
+                    return doubleValue < value;
             }
 
             return false;
-        }
-    }
-
-    static class CombineSegement implements Segement {
-        public final Segement left;
-        public final Segement right;
-        public final Operator operator;
-
-        public CombineSegement(Segement left, Segement right, Operator operator) {
-            this.left = left;
-            this.right = right;
-            this.operator = operator;
-        }
-
-        public Object eval(JSONPath path, Object rootObject, Object currentObject) {
-            return null;
-        }
-
-
-        static enum Operator {
-            And, Or
         }
     }
 
@@ -2321,11 +2349,6 @@ public class JSONPath implements JSONAware {
             fitlers.add(left);
             fitlers.add(right);
             this.and = and;
-        }
-
-        public FilterGroup(List<Filter> fitlers, boolean and) {
-            this.and = and;
-            this.fitlers = fitlers;
         }
 
         public boolean apply(JSONPath path, Object rootObject, Object currentObject, Object item) {
@@ -2630,6 +2653,36 @@ public class JSONPath implements JSONAware {
             return fieldValues;
         }
 
+        if (currentObject instanceof Object[]) {
+            Object[] array = (Object[]) currentObject;
+
+            if (SIZE == propertyNameHash || LENGTH == propertyNameHash) {
+                return array.length;
+            }
+
+            List<Object> fieldValues = new JSONArray(array.length);
+
+            for (int i = 0; i < array.length; ++i) {
+                Object obj = array[i];
+
+                //
+                if (obj == array) {
+                    fieldValues.add(obj);
+                    continue;
+                }
+
+                Object itemValue = getPropertyValue(obj, propertyName, propertyNameHash);
+                if (itemValue instanceof Collection) {
+                    Collection collection = (Collection) itemValue;
+                    fieldValues.addAll(collection);
+                } else if (itemValue != null) {
+                    fieldValues.add(itemValue);
+                }
+            }
+
+            return fieldValues;
+        }
+
         if (currentObject instanceof Enum) {
             final long NAME = 0xc4bcadba8e631b86L; // TypeUtils.fnv1a_64("name");
             final long ORDINAL = 0xf1ebc7c20322fc22L; //TypeUtils.fnv1a_64("ordinal");
@@ -2914,6 +2967,34 @@ public class JSONPath implements JSONAware {
             return beanSerializer.getSize(currentObject);
         } catch (Exception e) {
             throw new JSONPathException("evalSize error : " + path, e);
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    Set<?> evalKeySet(Object currentObject) {
+        if (currentObject == null) {
+            return null;
+        }
+
+        if (currentObject instanceof Map) {
+            // For performance reasons return keySet directly, without filtering null-value key.
+            return ((Map)currentObject).keySet();
+        }
+
+        if (currentObject instanceof Collection || currentObject instanceof Object[]
+            || currentObject.getClass().isArray()) {
+            return null;
+        }
+
+        JavaBeanSerializer beanSerializer = getJavaBeanSerializer(currentObject.getClass());
+        if (beanSerializer == null) {
+            return null;
+        }
+
+        try {
+            return beanSerializer.getFieldNames(currentObject);
+        } catch (Exception e) {
+            throw new JSONPathException("evalKeySet error : " + path, e);
         }
     }
 

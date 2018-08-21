@@ -18,13 +18,14 @@ package com.alibaba.fastjson.serializer;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONException;
 import com.alibaba.fastjson.util.IOUtils;
+import com.alibaba.fastjson.util.RyuDouble;
+import com.alibaba.fastjson.util.RyuFloat;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.Writer;
 import java.math.BigDecimal;
 import java.nio.charset.Charset;
-import java.util.Arrays;
 import java.util.List;
 
 import static com.alibaba.fastjson.util.IOUtils.replaceChars;
@@ -645,37 +646,60 @@ public final class SerializeWriter extends Writer {
     }
 
     public void writeFloat(float value, boolean checkWriteClassName) {
-        if (Float.isNaN(value) // 
-                || Float.isInfinite(value)) {
+        if (value != value || value == Float.POSITIVE_INFINITY || value == Float.NEGATIVE_INFINITY) {
             writeNull();
         } else {
-            String floatText= Float.toString(value);
-            if (isEnabled(SerializerFeature.WriteNullNumberAsZero) && floatText.endsWith(".0")) {
-                floatText = floatText.substring(0, floatText.length() - 2);
+            int newcount = count + 15;
+            if (newcount > buf.length) {
+                if (writer == null) {
+                    expandCapacity(newcount);
+                } else {
+                    String str = RyuFloat.toString(value);
+                    write(str, 0, str.length());
+
+                    if (checkWriteClassName && isEnabled(SerializerFeature.WriteClassName)) {
+                        write('F');
+                    }
+                    return;
+                }
             }
-            write(floatText);
-            
+
+            int len = RyuFloat.toString(value, buf, count);
+            count += len;
+
             if (checkWriteClassName && isEnabled(SerializerFeature.WriteClassName)) {
                 write('F');
             }
         }
     }
 
-    public void writeDouble(double doubleValue, boolean checkWriteClassName) {
-        if (Double.isNaN(doubleValue) //
-                || Double.isInfinite(doubleValue)) {
+    public void writeDouble(double value, boolean checkWriteClassName) {
+        if (Double.isNaN(value)
+                || Double.isInfinite(value)) {
             writeNull();
-        } else {
-            String doubleText = Double.toString(doubleValue);
-            if (isEnabled(SerializerFeature.WriteNullNumberAsZero) && doubleText.endsWith(".0")) {
-                doubleText = doubleText.substring(0, doubleText.length() - 2);
-            }
-            
-            write(doubleText);
+            return;
+        }
 
-            if (checkWriteClassName && isEnabled(SerializerFeature.WriteClassName)) {
-                write('D');
+        int newcount = count + 24;
+        if (newcount > buf.length) {
+            if (writer == null) {
+                expandCapacity(newcount);
+            } else {
+                String str = RyuDouble.toString(value);
+                write(str, 0, str.length());
+
+                if (checkWriteClassName && isEnabled(SerializerFeature.WriteClassName)) {
+                    write('D');
+                }
+                return;
             }
+        }
+
+        int len = RyuDouble.toString(value, buf, count);
+        count += len;
+
+        if (checkWriteClassName && isEnabled(SerializerFeature.WriteClassName)) {
+            write('D');
         }
     }
 
@@ -700,6 +724,14 @@ public final class SerializeWriter extends Writer {
         } else {
             writeInt(value.ordinal());
         }
+    }
+
+    /**
+     * @deprecated
+     */
+    public void writeLongAndChar(long i, char c) throws IOException {
+        writeLong(i);
+        write(c);
     }
 
     public void writeLong(long i) {
@@ -2093,7 +2125,11 @@ public final class SerializeWriter extends Writer {
         if (value == null) {
             writeNull();
         } else {
-            write(value.toString());
+            int scale = value.scale();
+            write(isEnabled(SerializerFeature.WriteBigDecimalAsPlain) && scale >= -100 && scale < 100
+                    ? value.toPlainString()
+                    : value.toString()
+            );
         }
     }
 
